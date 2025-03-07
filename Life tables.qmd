@@ -1,0 +1,94 @@
+---
+title: "SDD LIFE TABLES"
+format: html
+editor: visual
+---
+
+## Life Tables
+
+```{r}
+to_be_loaded <- c("tidyverse", 
+                  "patchwork", 
+                  "glue", 
+                  "ggforce", 
+                  "plotly",
+                  "ggthemes",
+                  "gapminder",
+                  "ggrepel",
+                  "here")
+
+for (pck in to_be_loaded) {
+  if (!require(pck, character.only = T)) {
+    install.packages(pck, repos="http://cran.rstudio.com/")
+    stopifnot(require(pck, character.only = T))
+  }  
+}
+```
+
+```{r}
+require(patchwork)
+require(glue)
+require(here)
+require(tidyverse)
+require(plotly)
+
+old_theme <-theme_set(theme_minimal(base_size=9, base_family = "Helvetica"))
+```
+
+```{r}
+country_code <- list(fr_t='FRATNP',
+                     fr_c='FRACNP',
+                     be='BEL',
+                     gb_t='GBRTENW',
+                     gb_c='GBRCENW',
+                     nl='NLD',
+                     it='ITA',
+                     swe='SWE',
+                     sp='ESP',
+                     us='USA')
+
+countries <- c('fr_t', 'gb_t', 'nl', 'it', 'sp', 'swe', 'us')
+
+country_names <- list(fr_t='France',     # total population
+                     fr_c='France',      # civilian population
+                     be='Belgium',
+                     gb_t='England & Wales',    # total population
+                     gb_c='England & Wales',    # civilian population
+                     nl='Netherlands',
+                     it='Italy',
+                     swe='Sweden',
+                     sp='Spain',
+                     us='USA')
+
+gender_names <- list('b'='Both',
+                     'f'='Female',
+                     'm'='Male')
+
+datafile <- 'full_life_table.Rds'
+fpath <- str_c("./DATA/", datafile) # here::here('DATA', datafile)   # check getwd() if problem 
+
+if (! file.exists(fpath)) {
+  download.file("https://stephane-v-boucheron.fr/data/full_life_table.Rds", 
+                fpath,
+                mode="wb")
+}
+
+life_table <- readr::read_rds(fpath)
+
+
+life_table <- life_table %>%
+  mutate(Country = as_factor(Country)) %>%
+  mutate(Country = fct_relevel(Country, "Spain", "Italy", "France", "England & Wales", "Netherlands", "Sweden", "USA")) %>%
+  mutate(Gender = as_factor(Gender)) 
+
+life_table <- life_table %>%
+  mutate(Area = fct_collapse(Country, 
+                        SE = c("Spain", "Italy", "France"), 
+                        NE = c("England & Wales", "Netherlands", "Sweden"), 
+                        USA="USA")) 
+```
+
+```{r}
+life_table%>%
+  filter(Country=='France', Year==2010, Gender=='Female', Age<10|Age>80 )
+```

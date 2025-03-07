@@ -1,0 +1,389 @@
+---
+title: "DM 2 - Eva Racine - Isabelle Lignières"
+format: html
+editor: visual
+---
+
+##### Eva Racine et Isabelle Lignières
+
+# Devoir II - Etude de table de mortalité
+
+## Importation des données :
+
+#### Mise en place des paramètres et des packages :
+
+```{r}
+params = list(
+  truc= "Science des Données",
+  year= 2023 ,
+  country_code= 'fr_t',
+  country= 'France',
+  datafile= 'full_life_table.Rds',
+  year_p= 1948,
+  year_e= 2017
+)
+```
+
+```{r}
+require(patchwork)
+require(glue)
+require(here)
+require(tidyverse)
+require(plotly)
+require(DT)
+require(ggforce)
+install.packages("demography", repos = "https://cran.r-project.org")
+
+old_theme <-theme_set(theme_minimal(base_size=9, base_family = "Helvetica"))
+```
+
+Nous avons eu un message d'erreur en voulant tracer un graphique disant "Error in draw_axis(break_positions = guide\$key\[\[aesthetic\]\], break_labels = guide\$key\$.label, : lazy-load database '/Library/Frameworks/R.framework/Versions/4.2/Resources/library/gtable/R/gtable.rdb' is corrupt". C'est un problème avec le package. En lancant ce code, le problème s'est résolu :
+
+```{r}
+#install.packages('gtable', repos = "https://cran.r-project.org")
+```
+
+#### Importation de la table de données :
+
+```{r}
+datafile <- 'full_life_table.Rds'
+fpath <- stringr::str_c("./DATA/", datafile)
+# here::here('DATA', datafile)
+# check getwd() if problem
+if (! file.exists(fpath)) {
+  download.file("https://stephane-v-boucheron.fr/data/full_life_table.Rds",
+                fpath,
+                mode="wb")
+}
+life_table <- readr::read_rds(fpath)
+```
+
+```{r}
+life_table <- life_table %>%
+  mutate(Country = as_factor(Country)) %>%
+  mutate(Country = fct_relevel(Country, "Spain", "Italy", "France",
+  "England & Wales", "Netherlands", "Sweden", "USA")) %>%
+  mutate(Gender = as_factor(Gender))
+life_table <- life_table %>%
+  mutate(Area = fct_collapse(Country,
+                        SE = c("Spain", "Italy", "France"),
+                        NE = c("England & Wales", "Netherlands", "Sweden"),
+                        USA="USA"))
+
+life_table
+```
+
+## Question 1 :
+
+On filtre d'abord la base de données pour garder les années de 1900 à 1913. De plus, la question nous demande une illustration pour chaque sexe. On va donc garder uniquement "Female" et "Male" et supprimer "Both" qui regroupe les deux car cela ne nous servira pas ici :
+
+```{r}
+life_table_1900a1913 <- life_table |> filter(Year>=1900 & Year<=1913) |> subset(Gender=="Male" | Gender=="Female") |> group_by(Country, Gender)
+
+life_table_1900a1913
+```
+
+Ensuite, on illustre pour chaque pays et chaque sexe, l'évolution des quotients de mortalité.
+
+On étudie donc le quotient de mortalité correspondant à la colonne "qx" qui représente le risque de mortalité à l'âge x.
+
+On remarque qu'on peut étudier qx comme une fonction de l'année t, mais aussi pour une année donnée, étudier qx comme une fonction de l'âge x (cf. sujet Devoir 2). On va donc représenter ces deux manières.
+
+#### Evolution des quotients de mortalité en fonction de l'âge pour une année t fixée entre 1900 et 1913 :
+
+```{r}
+proto_plt2 <-
+  ggplot() +
+  aes(x=Age, y=qx, colour=Country, frame=Year, linetype=Country) +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  geom_point(size=.1) +
+  geom_line(size=.1) +
+  scale_y_log10() +
+  labs(linetype=c("Country")) +
+  scale_x_continuous(breaks = c(seq(0, 100, 10), 109)) +
+  xlab("Age") +
+  ylab("Central death rates") +
+  facet_grid(cols=vars(Gender))
+
+with(params,
+(proto_plt2 %+%
+  (life_table_1900a1913)  +
+  ggtitle("Evolution des quotients de mortalité entre 1900 et 1913 en fonction de l'âge\n pour une année donnée"))) %>%
+  plotly::ggplotly()
+
+```
+
+#### Evolution des quotients de mortalité en fonction des années entre 1900 et 1913 pour un âge x fixé :
+
+```{r}
+proto_plt3 <-
+  ggplot() +
+  aes(x=Year, y=qx, colour=Country, frame=Age, linetype=Country) +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  geom_point(size=.5) +
+  geom_line(size=.1) +
+  scale_y_log10() +
+  labs(linetype=c("Country")) +
+  scale_x_continuous(breaks = c(seq(1900, 1913, 3))) +
+  xlab("Year") +
+  ylab("Central death rates") +
+  facet_grid(cols=vars(Gender))
+
+with(params,
+(proto_plt3 %+%
+  (life_table_1900a1913)  +
+  ggtitle("Evolution des quotients de mortalité entre 1900 et 1913 pour un âge donné"))) %>%
+  plotly::ggplotly()
+
+```
+
+##### Commentaire :
+
+Nous n'avons pas de données avant 1908 pour l'Espagne. Les courbes de l'Espagne se démarquent dans les deux graphes par de fortes fluctuations. Ceci peut être expliqué par des facteurs historiques ("el retraso" espagnol) ou par le manque de données puisqu'elles ne datent que de 1908.
+
+Premier graphique : Nous avons une forme de courbe en V que nous retrouvons au cours des 13 années avec un minimum à 10 ans. Pour la partie décroissante entre 0 et 10 ans, le risque de mourir chute ce qui est notamment dû aux nombreux riques liés à l'accouchement et la grossesse (morts-nés comptabilisé). Pour la croissance entre 10 et 109 ans, le risque de mourir à l'âge x augmente. Plus les personnes vieillissent, plus elles risquent de mourir.
+
+Deuxième graphique : Les courbes décroissent légèrement entre 1900 et 1913. Le risque de mourir à un âge x diminue au fil des ans. La décroissance est plus nette pour les âges compris entre 0 et 13 ans.
+
+## Question 2 :
+
+#### Régression linéaire du logarithme du quotient de mortalité entre 1900 et 1913 :
+
+On cherche à effectuer pour chaque pays, chaque sexe et chaque année entre 1900 et 1913 une régression linéaire du logarithme du quotient de mortalité en fonction de l'âge, pour des âges compris entre 30 et 70 ans.
+
+Premièrement, on va filtrer la base de données pour selectionner ce qui nous intéresse. On peut reprendre la base de données filtrée précédente qui prend les données entre 1900 et 1913. A cela, on selectionne uniquement les âges entre 30 et 70 ans, et on ajoute une colonne qui représente le logarithme du quotient de mortalité qx.
+
+```{r}
+life_table_1900_1913_3070 <- life_table_1900a1913 |> filter(Age<=70 & Age>=30) |> mutate(logqx = log(qx)) |> group_by(Country, Gender)
+
+life_table_1900_1913_3070
+```
+
+On peut par la suite illustrer la régression linéaire. On crée le même modèle de graphique que précédemment. La régression linéaire simple pour chaque pays, chaque sexe et chaque année se fera grâce à geom_smooth(method="lm", se=FALSE). En effet, lm est la fonction de R pour la régression.
+
+```{r}
+graph_reglin_0013 <-
+  ggplot() +
+  aes(x=Age, y=logqx, colour=Country, frame=Year)+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  geom_smooth(method="lm", se=FALSE)+
+  geom_point(size=.3) +
+  geom_line(size=.1) +
+  labs(linetype=c("Country")) +
+  scale_x_continuous(breaks = c(seq(30, 70, 10), 70)) +
+  xlab("Age") +
+  ylab("logarithme du quotient de mortalité") +
+  facet_grid(cols=vars(Gender))
+
+with(params,
+(graph_reglin_0013 %+%
+  (life_table_1900_1913_3070)  +
+  ggtitle("Régression linéaire du logarithme du quotient de mortalité en fonction de l'âge"))) %>%
+  plotly::ggplotly()
+
+```
+
+Les données se superposent mais on peut les isoler.
+
+#### Régression linéaire du logarithme du quotient de mortalité entre 1921 et 1925 :
+
+On filtre la base de données.
+
+```{r}
+life_table_1921_1925_3070 <- life_table |> filter(Year>=1921 & Year<=1925, Age<=70 & Age>=30, Gender!="Both") |> mutate(logqx = log(qx)) |> group_by(Country, Gender)
+
+life_table_1921_1925_3070
+```
+
+On peut par la suite illustrer la régression linéaire. On crée le même modèle de graphique que précédemment. La régression linéaire simple pour chaque pays, chaque sexe et chaque année se fera grâce à geom_smooth(method="lm", se=FALSE). En effet, lm est la fonction de R pour la régression. C'est en fait la même chose que pour 1900 à 1913.
+
+```{r}
+graph_reglin_2125 <-
+  ggplot() +
+  aes(x=Age, y=logqx, colour=Country, frame=Year)+
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5)) +
+  geom_smooth(method="lm", se=FALSE)+
+  geom_point(size=.3) +
+  geom_line(size=.1) +
+  labs(linetype=c("Country")) +
+  scale_x_continuous(breaks = c(seq(30, 70, 10), 70)) +
+  xlab("Age") +
+  ylab("logarithme du quotient de mortalité") +
+  facet_grid(cols=vars(Gender))
+
+with(params,
+(graph_reglin_2125 %+%
+  (life_table_1921_1925_3070)  +
+  ggtitle("Régression linéaire du logarithme du quotient de mortalité en fonction de l'âge"))) %>%
+  plotly::ggplotly()
+
+```
+
+#### Commentaire :
+
+La régression linéaire nous permet de remarquer que le quotient de mortalité est croissant entre 30 et 70 ans. Le risque de mourir à l'âge x croît lorsque x (l'âge) croît. Le logarithme du quotient de mortalité varie entre -6 et -3 car le quotient de mortalité varie entre 0,01 et 0,04 des nombres compris entre 0 et 1 donc le logarithme est négatif.
+
+## Question 3 :
+
+Il faut illustrer la différence entre les quotients de mortalité tirés des tables du moment de l'année 1890 et les quotient de mortalité effectivement subis entre 1890 et 1980. Pour cela on va créer deux tables (la table du moment de 1890 et la table de génération) et les joindre.
+
+Ensuite, on pourra comparer les deux quotients de mortalité : celui du moment pendant l'année de naissance et celui réel.
+
+#### Table du moment de 1890 :
+
+La table du moment est la table qui contient pour chaque année les risques de mortalité à différents âge pour la même année. Ainsi, la table du moment de 1890 ci-dessous nous donne tous les quotients de mortalité pour chaque âge en 1890 (pour chaque pays et chaque sexe). On s'arrête à 90 ans car la question se pose de 1890 à 1980, soit 90 ans.
+
+```{r}
+moment_1890 <- life_table |> filter(Year==1890, Age<=90) |> group_by(Country, Gender)
+
+moment_1890
+```
+
+#### Table de génération :
+
+La table de génération est comme une suite. On suit la cohorte des individus nés en 1890 jusqu'en 1980. C'est à dire qu'on regarde les quotients de mortalité à la naissance en 1890, puis les quotients de mortalité à un an en 1891, etc... jusqu'au quotient à l'âge de 90 ans en 1980.
+
+```{r}
+cohorte_1890 <-data.frame()
+for(i in 0:90) {
+  cohorte_1890 <- cohorte_1890 |> rbind(life_table|> filter(Age==i & Year==(1890+i)))
+}
+cohorte_1890
+```
+
+On joint ensuite les deux tables grâce à la fonction merge vue dans le DM précédent.
+
+```{r}
+all_cohorte_1890 <- merge(moment_1890, cohorte_1890, by=c("Age",'Gender', "Country")) |> rename("qx.1890"=qx.x, "qx.reel"=qx.y)
+
+tail(all_cohorte_1890)
+```
+
+Pour mettre en évidence la différence entre les deux quotients de mortalité, on peut les tracer pour chaque pays et les séparer en fonction du genre. On va d'abord transformer les colonnes qx.1890 et qx.reel en ligne.
+
+```{r}
+all_cohorte_1890_long <- all_cohorte_1890 |>
+  pivot_longer(cols=c("qx.1890", "qx.reel"), names_to="Qx", values_to = "valeur.qx")
+
+all_cohorte_1890_long
+```
+
+#### Pour la France :
+
+```{r}
+FR_1890 <- all_cohorte_1890_long |> filter(Country=='France')
+FR_1890
+
+g_france <- ggplot(FR_1890) +
+  aes(x = Age, y =valeur.qx, group = Qx, color = Qx) +
+  geom_line(aes(color=Qx))+
+  facet_grid(Gender ~ Country, scales = "free") +
+  labs(title = "Comparaison des quotients de mortalité des tables du moment \nde 1890 et des quotients de mortalité effectivement subis pour la France",
+       x = "Age",
+       y = "Valeur du quotient de mortalité",
+       color = "Quotients de mortalité") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom",
+        axis.title.x = element_text(size = 8, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(size = 8, face = "bold", hjust = 0.5))
+
+g_france
+```
+
+#### Pour l'Italie :
+
+```{r}
+IT_1890 <- all_cohorte_1890_long |> filter(Country=='Italy')
+IT_1890
+
+g_italie <- ggplot(IT_1890) +
+  aes(x = Age, y =valeur.qx, group = Qx, color = Qx) +
+  geom_line(aes(color=Qx))+
+  facet_grid(Gender ~ Country, scales = "free") +
+  labs(title = "Comparaison des quotients de mortalité des tables du moment \nde 1890 et des quotients de mortalité effectivement subis pour l'Italie",
+       x = "Age",
+       y = "Valeur du quotient de mortalité",
+       color = "Quotients de mortalité") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom",
+        axis.title.x = element_text(size = 8, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(size = 8, face = "bold", hjust = 0.5))
+
+g_italie
+```
+
+#### Pour l'Angleterre et Pays de Galles :
+
+```{r}
+EW_1890 <- all_cohorte_1890_long |> filter(Country=='England & Wales')
+EW_1890
+
+g_enwa <- ggplot(EW_1890) +
+  aes(x = Age, y =valeur.qx, group = Qx, color = Qx) +
+  geom_line(aes(color=Qx))+
+  facet_grid(Gender ~ Country, scales = "free") +
+  labs(title = "Comparaison des quotients de mortalité des tables du moment \nde 1890 et des quotients de mortalité effectivement subis pour l'Angleterre et Pays de Gales",
+       x = "Age",
+       y = "Valeur du quotient de mortalité",
+       color = "Quotients de mortalité") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom",
+        axis.title.x = element_text(size = 8, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(size = 8, face = "bold", hjust = 0.5))
+
+g_enwa
+```
+
+#### Pour les Pays-Bas :
+
+```{r}
+NETH_1890 <- all_cohorte_1890_long |> filter(Country=='Netherlands')
+NETH_1890
+
+g_neth <- ggplot(NETH_1890) +
+  aes(x = Age, y =valeur.qx, group = Qx, color = Qx) +
+  geom_line(aes(color=Qx))+
+  facet_grid(Gender ~ Country, scales = "free") +
+  labs(title = "Comparaison des quotients de mortalité des tables du moment \nde 1890 et des quotients de mortalité effectivement subis pour les Pays-Bas",
+       x = "Age",
+       y = "Valeur du quotient de mortalité",
+       color = "Quotients de mortalité") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom",
+        axis.title.x = element_text(size = 8, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(size = 8, face = "bold", hjust = 0.5))
+
+g_neth
+```
+
+#### Pour la Suède :
+
+```{r}
+SWE_1890 <- all_cohorte_1890_long |> filter(Country=='Sweden')
+SWE_1890
+
+g_suede <- ggplot(SWE_1890) +
+  aes(x = Age, y =valeur.qx, group = Qx, color = Qx) +
+  geom_line(aes(color=Qx))+
+  facet_grid(Gender ~ Country, scales = "free") +
+  labs(title = "Comparaison des quotients de mortalité des tables du moment \nde 1890 et des quotients de mortalité effectivement subis pour la Suède",
+       x = "Age",
+       y = "Valeur du quotient de mortalité",
+       color = "Quotients de mortalité") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom",
+        axis.title.x = element_text(size = 8, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(size = 8, face = "bold", hjust = 0.5))
+
+g_suede
+```
+
+#### Commentaire :
+
+Les courbes du quotient de mortalité de la table de moment et de la table de génération sont identiques entre 0 et 50 ans excepté vers 25 pour pratiquement tous les pays.
+
+On observe deux différences : un pic de la courbe du quotient de mortalité réel vers 25 ans et la courbe du quotient de mortalité réel est en dessous de celle des quotients de mortalité tirés de la table de moment après 50 ans.
+
+Pic vers 25 ans : On observe un pic (plus ou moins prononcé selon le sexe et le pays) de la courbe du quotient réel vers l'âge de 25 ans, ce qui correspond aux années 1914 (1890+24) et 1918 (1890+28) et donc à la première guerre mondiale. Les personnes, particulièrement les hommes, nées en 1890 à l'âge de 25 ans sont confrontées à de nombreux risques dus à la première guerre mondiale. La France, l'Italie, l'Angleterre et les Pays-Bas ont un pic plus prononcé puisqu'ils sont des pays qui ont été au coeur de la guerre (le front est en France). Les hommes sont plus mort entre 24 et 28 ans que ce qui était prévu en 1890 vu que la table de moment de 1890 ne tenait pas compte la première guerre mondiale.
+
+Après 50 ans : Pour tous les pays la courbe du quotient de mortalité réel après 50 ans passe en dessous de celle du quotient de mortalité de la table de moment. Le risque de mourir après 50 ans a diminué par rapport à 1890.

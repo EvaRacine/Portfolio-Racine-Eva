@@ -1,0 +1,621 @@
+---
+title: "DEVOIR 1 - Science des données"
+author: "Eva Racine"
+date: "2024-02-07"
+output: html_document
+---
+
+##### Eva Racine et Gayanée Tashjian - Groupe E
+
+# Devoir I : Concentration de la distribution des prénoms dans le temps et l'espace.
+
+## Importation des bases de données :
+
+Ici, nous installons les packages nécessaires :
+
+```{r}
+to_be_loaded <- c("tidyverse", 
+                  "patchwork", 
+                  "glue", 
+                  "ggforce", 
+                  "plotly",
+                  "ggthemes",
+                  "gapminder",
+                  "ggrepel",
+                  "here",
+                  "ineq",
+                  "DescTools",
+                  "zoo")
+
+for (pck in to_be_loaded) {
+  if (!require(pck, character.only = TRUE, quietly = TRUE)) {
+    install.packages(pck, repos="http://cran.rstudio.com/")
+    suppressPackageStartupMessages(library(pck, character.only = TRUE))
+  } else {
+    suppressPackageStartupMessages(library(pck, character.only = TRUE))
+  }
+}
+
+```
+
+Nous allons ensuite importer les bases de données Babynames pour les deux pays qui nous intéressent. Puis on les nomme df_us pour les USA, et df_fr pour la France.
+
+#### Pour les US :
+
+```{r}
+if (!require("babynames")){
+  install.packages("babynames")
+  stopifnot(require("babynames"), "Couldn't install and load package 'babynames'")
+}
+
+df_us <- babynames |>
+  mutate(country='us') |>
+  mutate(sex=as_factor(sex))
+
+tail(df_us)
+```
+
+#### Pour la France :
+
+```{r}
+path_data <- 'DATA'
+fname <- 'nat2021_csv.zip'
+fpath <- here(path_data, fname)
+if (!file.exists(fpath)){
+  url <- "https://www.insee.fr/fr/statistiques/fichier/2540004/nat2021_csv.zip"
+  download.file(url, fpath)
+}   
+
+df_fr <- readr::read_csv2(fpath)
+
+df_fr |> glimpse()
+
+lkp <- list(year="annais",
+  sex="sexe",
+  name="preusuel",
+  n="nombre")
+
+df_fr <- df_fr |>
+  rename(!!!lkp) |>
+  mutate(country='fr') |>
+  mutate(sex=as_factor(sex)) |>
+  mutate(sex=fct_recode(sex, "M"="1", "F"="2")) |>
+  mutate(sex=fct_relevel(sex, "F", "M")) |> 
+  mutate(year=ifelse(year=="XXXX", NA, year)) |>
+  mutate(year=as.integer(year)) |>
+  arrange(year)
+
+df_fr
+```
+
+La base de donnée des USA n'est pas tout à fait la même que celle de la France. On va donc drop les années de 1880 à 1899 et la colonne "prop" de df_us et les années de 2018 à 2021 de df_fr. Ainsi, les deux tables auront exactement les mêmes années et colonnes.
+
+```{r}
+df_us <- df_us |> select(-prop) |> subset(year>=1900)
+
+df_fr <- df_fr |> subset(year<=2017)
+
+df_us
+df_fr
+```
+
+## Mesures de l'inégalité et de la diversité
+
+### Question 1 :
+
+Calculer pour chaque année, sexe et pays les indicateurs suivants de la dispersion/concentration de la distribution des prénoms.
+
+#### Courbe de Lorenz :
+
+```{r}
+make_lorenz_df <- function(df) {  
+  df |>
+  group_by(year, sex) |>
+  arrange(n) |>
+  mutate(rr=row_number()/n(), L=cumsum(n)/sum(n),  p=n/sum(n)) |>
+  ungroup()
+}
+
+#Pour la France :
+df_lorenz_fr <- df_fr |> 
+  filter(name != '_PRENOMS_RARES' &  !is.na(year)) |>
+  make_lorenz_df()
+df_lorenz_fr
+
+#Pour les US :
+df_lorenz_us <- df_us |> 
+  make_lorenz_df()
+df_lorenz_us
+```
+
+row_number : rang/classement des prénoms par année et par sexe du plus au moins donné. C'est l'indice i dans lz formule mathématique de la courbe de Lorenz. (rang 1= prénom de moins donné dans l'année).
+
+n() : calcule le nombre de prénoms donnés dans l'année par sexe.
+
+sum(n) : nombre total de naissance par année et par sexe.
+
+rr : le rang divisé par le nombre total de prénom par année et par sexe. Indice de rareté par année. Plus c'est grand(proche de 1) moins c'est rare. Plus c'est proche de 0, plus c'est rare.
+
+cumsum(n) : somme cumulée du nombre de naissances.
+
+p : la fréquence du prénom par année et par sexe.
+
+#### 1) Indice de Gini :
+
+```{r}
+#Indice de Gini France :
+p_gini_fr <- df_lorenz_fr |>
+  group_by (year,sex) |>
+  summarize(Gini=2*sum(rr*p)-1-1/n(), .groups='drop') |>
+  mutate (country = 'FRANCE')
+
+p_gini_fr
+
+#Indice de Gini USA :
+p_gini_us <- df_lorenz_us |>
+  group_by (year,sex) |>
+  summarize(Gini=2*sum(rr*p)-1-1/n(), .groups='drop')|>
+  mutate (country = 'USA')
+p_gini_us
+
+#On joint les deux tables :
+gini <- full_join(p_gini_fr,p_gini_us, by = c('sex', 'year', 'country', 'Gini'))
+gini
+```
+
+#### 2) Entropie de Shannon :
+
+```{r}
+#Entropie de Shannon, fonction :
+p_shannon <- function(df, co) { 
+  df |>
+  group_by(year, sex) |>
+  mutate(p=n/sum(n)) |>
+  summarize(Shannon=sum(p*log(p, base = 2)), .groups='drop') |>
+  mutate (country = co )
+}
+
+#Entropie de Shannon pour la France :
+p_shannon_fr <- p_shannon(df_fr, 'FRANCE')
+p_shannon_fr
+
+#Entropie de Shannon pour les US, sans la fonction :
+p_shannon_us <- p_shannon(df_us, "USA")
+
+p_shannon_us
+
+#On joint les deux tables :
+shannon <- full_join(p_shannon_fr, p_shannon_us, by = c('country','sex', 'year','Shannon'))
+shannon
+```
+
+Nous vérifions rapidement si les données trouvées sont bonnes grâce à la fonction Entropy du package ineq, en utilisant, par exemple, l'année 1900 et le sexe M pour la France :
+
+```{r}
+shannon_fr_test <- df_lorenz_fr |> filter(year==1900 & sex=='M')
+Entropy(shannon_fr_test$p, base=2)
+```
+
+#### 3) Entropie de Rényi (ordre 2) :
+
+```{r}
+#Entropie de Rényi, fonction :
+p_renyi <- function(df, co){
+  df |>
+  group_by(year,sex) |>
+  arrange(n) |>
+  mutate(p=n/sum(n)) |>
+  summarize(Renyi=-log(sum(p**2),base = 2), .groups='drop') |>
+  mutate (country = co )
+}
+
+#Pour la France :
+p_renyi_fr <- p_renyi(df_fr, 'FRANCE')
+p_renyi_fr
+
+#Pour les US :
+p_renyi_us <- p_renyi(df_us, 'USA')
+p_renyi_us
+
+#On joint les deux tables :
+renyi <- full_join(p_renyi_fr, p_renyi_us, by = c('country','sex', 'year','Renyi'))
+renyi
+```
+
+#### 4) Majorité minimale d'Alker :
+
+```{r}
+#Fonction :
+p_alker <- function(lorenz, co){
+  lorenz |> arrange(year,sex) |> filter(L>0.5) |>
+  group_by(year,sex) |>
+  summarize(Alker=min(rr), .groups='drop')|>
+  mutate (country = co )
+}
+
+#Pour la France :
+p_alker_fr <- p_alker(df_lorenz_fr, 'FRANCE')
+p_alker_fr
+
+#Pour les USA :
+p_alker_us <- p_alker(df_lorenz_us, 'USA')
+p_alker_us
+
+#On joint les deux tables :
+alker <- full_join(p_alker_fr, p_alker_us, by = c('country','sex', 'year','Alker'))
+alker
+```
+
+#### 5) Part du dernier décile :
+
+```{r}
+a=0.1
+
+#Fonction
+p_decile <- function(lorenz, co) {  
+  lorenz |> arrange(year,sex) |> filter(rr>=1-a) |>
+  group_by(year, sex) |>
+  summarize(Decile=1-min(L), .groups = 'drop') |>
+  arrange(year)|>
+  mutate (country = co )
+}
+
+#Pour la France :
+p_decile_fr <- p_decile(df_lorenz_fr, 'FRANCE')
+p_decile_fr
+
+#Pour les US :
+p_decile_us <- p_decile(df_lorenz_us, 'USA')
+p_decile_us
+
+#On joint les deux tables :
+decile <- full_join(p_decile_fr, p_decile_us, by = c('country','sex', 'year','Decile'))
+decile
+```
+
+#### 6) Indice d'Atkinson :
+
+```{r}
+#Indice d'Atkinson, fonction :
+a=0.5
+
+p_atkinson <- function(df, co){
+  df |>
+  group_by(year,sex) |>
+  mutate(p=n/sum(n)) |>
+  summarize(Atkinson = 1 - (1/n()) * (sum(p**(1-a)))**(1/(1-a)), .groups = 'drop')|>
+  mutate (country = co )
+}
+
+#Pour la France :
+p_atkin_fr <- p_atkinson(df_fr, 'FRANCE')
+p_atkin_fr
+
+#Pour les US :
+p_atkin_us <- p_atkinson(df_us, 'USA')
+p_atkin_us
+
+#On joint les deux tables :
+atkinson <- full_join(p_atkin_fr, p_atkin_us, by = c('country','sex', 'year','Atkinson'))
+atkinson
+```
+
+On vérifie rapidement si les données trouvées sont bonnes grâce à la fonction Atkinson du package ineq. Ici, on a fixé le paramètre alpha à 0.5 comme au dessus. :
+
+```{r}
+atkinson_fr_test <- df_lorenz_fr |> filter(year==1900 & sex=='M')
+Atkinson(atkinson_fr_test$p, parameter = 0.5, na.rm = TRUE)
+```
+
+#### Création de la table où chaque ligne correspond à un pays, une année, un sexe (la clé) et une colonne par indicateur :
+
+```{r}
+A <- merge(gini, shannon, by = c('country','sex', 'year'))
+B <- merge(A, renyi, by = c('country','sex', 'year'))
+C <- merge(B, alker, by = c('country','sex', 'year'))
+D <- merge(C, decile, by = c('country','sex', 'year'))
+E <- merge(D, atkinson, by = c('country','sex', 'year'))
+
+indicateurs <- E |> arrange (year)
+head(indicateurs)@
+
+```
+
+### Question 2 :
+
+Tracer les graphes de l'évolution de ces indicateurs de la dispersion/concentration de la distribution. Utiliser le mécanisme des facettes pour juxtaposer les graphes correspondants aux quatre couples (Pays, Sexe). Pour chaque (Pays, Sexe), superposez les graphes des indicateurs en fonction du temps.
+
+#### On trace chacun des indicateurs :
+
+```{r}
+g_gini <- ggplot(gini) +
+  aes(x=year, y=Gini, group=sex)+
+  geom_line(aes(color=sex))
+
+g_gini+facet_grid(sex~country) +
+  labs(title="Évolution de l'Indice de Gini par pays et par sexe")+
+  xlab("années") +
+  ylab("indice de Gini") +
+  theme(plot.title = element_text(size=12, face="bold", hjust = 0.5),
+        legend.position = "bottom" , 
+        axis.title.x = element_text(size=8, face="bold", hjust = 0.5),
+        axis.title.y = element_text(size=8, face="bold", hjust = 0.5))
+
+```
+
+
+```{r}
+g_shannon<- ggplot(shannon) +
+  aes(x=year, y=Shannon, group=sex)+
+  geom_line(aes(color=sex))
+
+g_shannon+facet_grid(sex~country) +
+  labs(title="Évolution de l'Entropie de Shannon par pays et par sexe")+
+  xlab("années") +
+  ylab("entropie de Shannon") +
+  theme(plot.title = element_text(size=12, face="bold", hjust = 0.5),
+        legend.position = "bottom" , 
+        axis.title.x = element_text(size=8, face="bold", hjust = 0.5),
+        axis.title.y = element_text(size=8, face="bold", hjust = 0.5))
+```
+
+
+```{r}
+g_renyi <- ggplot(renyi) +
+  aes(x=year, y=Renyi, group=sex)+
+  geom_line(aes(color=sex))
+
+g_renyi+facet_grid(sex~country) +
+  labs(title="Évolution de l'Entropie de Renyi par pays et par sexe")+
+  xlab("années") +
+  ylab("entropie de Renyi") +
+  theme(plot.title = element_text(size=12, face="bold", hjust = 0.5),
+        legend.position = "bottom" , 
+        axis.title.x = element_text(size=8, face="bold", hjust = 0.5),
+        axis.title.y = element_text(size=8, face="bold", hjust = 0.5))
+```
+
+```{r}
+g_alker <- ggplot(alker) +
+  aes(x=year, y=Alker, group=sex)+
+  geom_line(aes(color=sex))
+
+g_alker+facet_grid(sex~country) +
+  labs(title="Évolution de la majorité minimale d'Alker par pays et par sexe")+
+  xlab("années") +
+  ylab("majorité minimale d'Alker") +
+  theme(plot.title = element_text(size=12, face="bold", hjust = 0.5),
+        legend.position = "bottom" , 
+        axis.title.x = element_text(size=8, face="bold", hjust = 0.5),
+        axis.title.y = element_text(size=8, face="bold", hjust = 0.5))
+```
+
+```{r}
+g_decile <- ggplot(decile) +
+  aes(x=year, y=Decile, group=sex)+
+  geom_line(aes(color=sex))
+
+g_decile+facet_grid(sex~country) +
+  labs(title="Évolution de la part du dernier décile par pays et par sexe")+
+  xlab("années") +
+  ylab("part du dernier décile") +
+  theme(plot.title = element_text(size=12, face="bold", hjust = 0.5),
+        legend.position = "bottom" , 
+        axis.title.x = element_text(size=8, face="bold", hjust = 0.5),
+        axis.title.y = element_text(size=8, face="bold", hjust = 0.5))
+```
+
+```{r}
+g_atkinson <- ggplot(atkinson) +
+  aes(x=year, y=Atkinson, group=sex)+
+  geom_line(aes(color=sex))
+
+g_atkinson+facet_grid(sex~country) +
+  labs(title="Évolution de l'Indice d'Atkinson par pays et par sexe")+
+  xlab("années") +
+  ylab("indice d'Atkinson") +
+  theme(plot.title = element_text(size=12, face="bold", hjust = 0.5),
+        legend.position = "bottom" , 
+        axis.title.x = element_text(size=8, face="bold", hjust = 0.5),
+        axis.title.y = element_text(size=8, face="bold", hjust = 0.5))
+```
+
+#### On trace tous les indicateurs sur la même facet_grid :
+
+```{r}
+indicateurs_long <- indicateurs |>
+  pivot_longer(cols = c(-country, -sex, -year), names_to = "indicateur", values_to = "valeur")
+
+indicateurs_long
+
+
+ g_indicateurs <- ggplot(indicateurs_long) +
+  aes(x = year, y = valeur, group = indicateur, color = indicateur) +
+  geom_line(aes(color=indicateur))+
+  scale_y_continuous(sec.axis = sec_axis(~ . -10))+
+  facet_grid(sex ~ country, scales = "free") +
+  labs(title = "Évolution des Indicateurs par pays et par sexe",
+       x = "Année",
+       y = "Valeur",
+       color = "Indicateurs",
+       subtitle = "Comparaison des indicateurs") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom",
+        axis.title.x = element_text(size = 8, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(size = 8, face = "bold", hjust = 0.5))
+ 
+graphe<- ggplotly(g_indicateurs, dynamicTicks = TRUE)
+config(graphe, scrollZoom=TRUE)
+```
+
+Avec la fonction ggplotly (du package plotly), on crée un graphique interactif qui nous permet de zoomer. En effet, Shannon et Renyi ne sont pas à la même échelle, ce qui fait qu'on ne distingue pas toutes les autres courbes. Avec ggplotly et en plaçant notre curseur sur l'axe des valeurs, on peut zoomer à plus petite échelle et ainsi les courbes de Alker, Atkinson, Gini et de la part du dernier décile se distinguent.
+
+## Ajustement à une loi de Zipf
+
+### Question 3 :
+
+#### On crée la table de données que nous allons étudier :
+
+```{r}
+name_fr_select <- df_fr |> filter(year %in% c(1950,1990,2015))
+
+name_us_select <- df_us |> filter(year %in% c(1950,1990,2015))
+
+popularite_desc <- function(df){
+  df|>
+  group_by(year,sex)  |> 
+  arrange(desc(n)) |>
+  mutate(rr=row_number(), p=n/sum(n))
+}
+
+pop_fr <- popularite_desc(name_fr_select)
+pop_fr
+
+pop_us <- popularite_desc(name_us_select)
+pop_us
+```
+
+#### Nous pouvons ainsi tracer les diagrammes de Zipf :
+
+```{r}
+#Pour la France :
+zipf_France <- ggplot(pop_fr) +
+  aes(x = log(rr), y = log(p), group = year, color = as.factor(year)) +
+  geom_point()+
+  facet_grid(sex~., scales = "free") +
+  labs(title = "Diagramme de Zipf pour la France \npour les années 1950,1990,2015",
+       x = "Rang du prénom à l'échelle logarithmique",
+       y = "Popularité du prénom à l'échelle logarithmique",
+       color = "Années") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom")
+
+zipf_USA <- ggplot(pop_us) +
+  aes(x = log(rr), y = log(p), group = year, color = as.factor(year)) +
+  geom_point()+
+  facet_grid(sex~., scales = "free") +
+  labs(title = "Diagramme de Zipf pour les USA \npour les années 1950,1990,2015",
+       x = "Rang du prénom à l'échelle logarithmique",
+       y = "Popularité du prénom à l'échelle logarithmique",
+       color = "Années") +
+  theme(plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
+        legend.position = "bottom")
+
+zipf_France + zipf_USA
+```
+
+## Profils de popularité
+
+### Question 4 :
+
+On commence par filtrer la base de données et en créée une nouvelle avec les années qui nous intéressent, c'est-à-dire les années depuis 1948.
+
+```{r}
+#Pour la France :
+name_fr_48 <- df_fr |> filter(name != '_PRENOMS_RARES' &  !is.na(year) & year >=1948)
+
+#Pour les US :
+name_us_48 <- df_us |> filter(name != '_PRENOMS_RARES' &  !is.na(year) & year >=1948)
+
+```
+
+Ensuite, on va selectionner les prénoms qui ont figurés au moins une fois parmi les 300 prénoms les plus populaires depuis 1948 pour les deux pays :
+
+```{r}
+#Pour la France :
+name_fr_300 <- name_fr_48 |> 
+  group_by(year,sex) |>
+  arrange(desc(n)) |> #car pour le n est grand, plus le prénom a été donné. Donc on veut les ranger par ordre décroissant afin de les numéroter du plus donné au moins donné.
+  mutate(rr=row_number(),p=n/sum(n)) |> #rr est le rang et p la popularité. On aura besoin de p pour faire la moyenne mobile.
+  filter(rr<=300) |>
+  arrange(name,year,sex)
+
+name_fr_300
+
+#Pour les US :
+name_us_300 <- name_us_48 |> 
+  group_by(year,sex) |>
+  arrange(desc(n)) |>
+  mutate(rr=row_number(), p=n/sum(n)) |>
+  filter(rr<=300) |>
+  arrange(name,year,sex)
+
+name_us_300
+```
+
+Ensuite, on va essayer de calculer les moyennes mobiles des popularités. On utilise la fonction rollmeanr du package zoo trouvée sur https://stackoverflow.com/questions/16193333/moving-average-of-previous-three-values-in-r.
+
+```{r}
+name_fr_rm <- name_fr_300 |> group_by(name) |>
+  mutate(moy_mobile = rollmeanr(p,4, fill=NA))
+name_fr_rm
+
+name_us_rm <- name_us_300 |> group_by(name) |>
+  mutate(moy_mobile = rollmeanr(p,4, fill=NA))
+name_us_rm
+```
+
+Nous allons étudier les variations. J'expliquerai par la suite mon code.
+
+#### Pour la France :
+
+```{r}
+name_fr_rm$categorie <- NA #on crée la colonne de catégorie
+
+tendance <- function(mobilemoy) {
+  if (all(diff(mobilemoy, na.rm = TRUE) < 0, na.rm = TRUE)) {
+    return('Baisse continue')
+  } else if (all(diff(mobilemoy, na.rm = TRUE) > 0, na.rm = TRUE)) {
+    return('Hausse continue')
+  } else if (!is.na(which.max(mobilemoy)) & !is.na(which.min(mobilemoy)) & which.max(mobilemoy) < which.min(mobilemoy)) {
+    return('Populaire suivi d\'un déclin')
+  } else if (!is.na(which.max(mobilemoy)) & !is.na(which.min(mobilemoy)) & which.max(mobilemoy) > which.min(mobilemoy)) {
+    return('Déclin suivi d\'un regain de popularité')
+  }
+}
+
+for (name in unique(name_fr_rm$name)) {
+  groupbyprenom <- name_fr_rm[name_fr_rm$name == name, ]
+  truc <- tendance(groupbyprenom$moy_mobile)
+  name_fr_rm[name_fr_rm$name == name, 'categorie'] <- truc
+}
+
+unique(name_fr_rm[, c('name', 'categorie')])
+```
+
+Dans notre fonction "tendance" qui va catégoriser chaque prénom, nous utilisons la fonction diff() qui calcule la différence entre les valeurs de la moyenne mobile, en igorant les valeurs manquantes grâce à na.rm=TRUE (cf. https://thinkr.fr/abcdr/comment-gerer-les-donnees-manquantes-lors-dune-operation-grace-au-parametre-na-rm/). Je le met partout par tatonnement, pour que le code marche...
+
+(all(diff(mobilemoy, na.rm = TRUE) \< 0, na.rm = TRUE)) : on vérifie si toutes les différences des moyennes mobiles du prénom sont négatives. Si c'est le cas, alors c'est une baisse continue de popularité. Si ce n'est pas le cas, on passe à un autre "else if.." :
+
+else if (all(diff(mobilemoy, na.rm = TRUE) \> 0, na.rm = TRUE)) : c'est lan même chose mais pour la hausse. Si toutes les différences des moyennes mobiles du prénom donné sont positives, alors c'est une hausse continue de popularité.
+
+Si ce n'est dans aucun de ces deux cas, on vérifie si c'est une hausse PUIS un déclin de popularité ou l'inverse grâce aux deux else if suivants :
+
+\<\< Else if (!is.na(which.max(mobilemoy)) & !is.na(which.min(mobilemoy)) & which.max(mobilemoy) \< which.min(mobilemoy)) { return('Populaire suivi d\\'un déclin') } else if (!is.na(which.max(mobilemoy)) & !is.na(which.min(mobilemoy)) & which.max(mobilemoy) \> which.min(mobilemoy)) { return('Déclin suivi d\\'un regain de popularité') \>\>
+
+Avec !is.na(which.max(mobilemoy)) & !is.na(which.min(mobilemoy)) on vérifie que les valeurs renvoyées par which.max et which.min ne sont pas des NA.
+
+Ensuite, pour utiliser la fonction, j'utilise une boucle for qui va parcourir chaque prénom de la base de données ( for (name in unique(name_fr_rm\$name)) ). Ici c'est comme un SELECT DISTINCT.
+
+Ensuite je vais faire groupbyprenom \<- name_fr_rm\[name_fr_rm\$name == name, \], ça va donc prendre en compte uniquement les lignes suivantes (donc les années suivantes) dont le prénom est identique à celui actuellement pris dans la boucle for du début. Ca nous fait comme une mini base de données d'un unique prénom pour toutes les années.
+
+A celà on va appliquer notre fonction tendance expliquée plus haut, sur les p associés au prénom de la boucle for. Cela va nous renvoyer la catégorie. Nous l'avons appelé truc par manque d'inspiration et pour ne pas nous mélanger les pinceaux avec la colonne catégorie que nous avons créé.
+
+A la fin, j'associe la catégorie du prénom ('truc') à la colonne catégorie de notre base de donnée pour chaque année ou le prénom est identique au prénom actuellement étudié de la boucle for. name_fr_rm\[name_fr_rm\$name == name, 'categorie'\] \<- truc.
+
+On peut faire la même chose pour les us :
+
+#### Pour les USA :
+
+```{r}
+name_us_rm$categorie <- NA
+for (name in unique(name_us_rm$name)) {
+  groupbyprenom <- name_us_rm[name_us_rm$name == name, ]
+  truc <- tendance(groupbyprenom$moy_mobile)
+  name_us_rm[name_us_rm$name == name, 'categorie'] <- truc
+}
+
+unique(name_us_rm[, c('name', 'categorie')])
+```
+
+Nous avons utilisé des boucles if, elif et for comme dans python car nous manipulons ce language depuis la première année de licence et il était donc plus facile pour nous d'essayer comme cela. Nous pensons que ce code n'est pas optimisé et pas parfait car si on regarde par exemple le premier prénom de la table française (Aaron), on remarque que notre code renvoie "Hausse continue". Or ce prénom n'est apparu dans les 300 prénoms les plus donnés qu'à partir de 2004. Il a connu une hausse continue que depuis 2004. Le code n'a pas pu prendre en compte que le prénom n'existait pas avant.
